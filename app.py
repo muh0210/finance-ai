@@ -1,20 +1,12 @@
 """
-app.py — AI Financial Decision Assistant (Streamlit UI)
+app.py — AI Financial Decision Assistant (Streamlit UI) v2.0
 
-This is the main entry point. Run with:
-    streamlit run app.py
-
-WHAT THE USER SEES:
-    1. Enter a stock symbol (e.g., AAPL)
-    2. Click "Analyze"
-    3. System fetches data, runs ML model, and displays:
-       - Stock info & current price
-       - Interactive price chart with indicators
-       - BUY/SELL/HOLD decision with confidence
-       - Risk score with breakdown
-       - Detailed explanation of WHY
-       - Feature importance chart
-       - Multi-stock comparison (bonus)
+NEW IN v2.0:
+    - Backtesting with equity curve chart
+    - News Sentiment Analysis
+    - PDF Report Download
+    - Support/Resistance Levels
+    - Advanced Financial Metrics (Sharpe, Sortino, Calmar)
 """
 
 import streamlit as st
@@ -30,6 +22,9 @@ from utils.data_loader import load_data, get_stock_info
 from utils.indicators import add_all_indicators, FEATURE_COLUMNS
 from utils.model import train_model
 from utils.decision import make_decision, calculate_risk, generate_explanation, simple_portfolio_suggestion
+from utils.backtest import run_backtest, calculate_support_resistance, calculate_advanced_metrics
+from utils.sentiment import get_sentiment_analysis
+from utils.report import generate_report
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -166,6 +161,30 @@ st.markdown("""
         background: linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 100%);
     }
     
+    /* --- News cards --- */
+    .news-positive { border-left: 4px solid #22c55e; }
+    .news-negative { border-left: 4px solid #ef4444; }
+    .news-neutral { border-left: 4px solid #f59e0b; }
+    
+    .news-card {
+        background: rgba(30,30,60,0.5);
+        border-radius: 0 10px 10px 0;
+        padding: 12px 16px;
+        margin: 6px 0;
+        color: #d0d0ff;
+        font-size: 0.95rem;
+    }
+    
+    /* --- Support/Resistance --- */
+    .sr-level {
+        display: inline-block;
+        padding: 6px 14px;
+        border-radius: 8px;
+        margin: 4px;
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+    
     /* --- Hide Streamlit branding --- */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -194,6 +213,13 @@ with st.sidebar:
         index=1,
         help="How far back to look. 2 years balances data quantity with relevance."
     )
+    
+    st.markdown("---")
+    
+    # Feature toggles
+    st.markdown("### ⚙️ Analysis Options")
+    run_backtest_opt = st.checkbox("📉 Run Backtest", value=True, help="Test model on historical data")
+    run_sentiment_opt = st.checkbox("📰 News Sentiment", value=True, help="Analyze recent news headlines")
     
     st.markdown("---")
     
@@ -237,7 +263,7 @@ def format_market_cap(cap):
     return f"${cap:,.0f}"
 
 
-def create_price_chart(data: pd.DataFrame, symbol: str) -> go.Figure:
+def create_price_chart(data, symbol):
     """Create an interactive candlestick chart with indicators."""
     fig = make_subplots(
         rows=4, cols=1,
@@ -252,119 +278,92 @@ def create_price_chart(data: pd.DataFrame, symbol: str) -> go.Figure:
         )
     )
     
-    # --- Row 1: Candlestick + Bollinger Bands + MAs ---
     fig.add_trace(go.Candlestick(
         x=data.index, open=data["Open"], high=data["High"],
         low=data["Low"], close=data["Close"],
         name="Price", increasing_line_color="#22c55e", decreasing_line_color="#ef4444"
     ), row=1, col=1)
     
-    # Moving Averages
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["MA10"], name="MA10",
-        line=dict(color="#60a5fa", width=1.2)
-    ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["MA50"], name="MA50",
-        line=dict(color="#f59e0b", width=1.2)
-    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data["MA10"], name="MA10",
+        line=dict(color="#60a5fa", width=1.2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data["MA50"], name="MA50",
+        line=dict(color="#f59e0b", width=1.2)), row=1, col=1)
     
-    # Bollinger Bands
     if "BB_upper" in data.columns:
-        fig.add_trace(go.Scatter(
-            x=data.index, y=data["BB_upper"], name="BB Upper",
-            line=dict(color="rgba(139,92,246,0.4)", width=1, dash="dot")
-        ), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=data.index, y=data["BB_lower"], name="BB Lower",
+        fig.add_trace(go.Scatter(x=data.index, y=data["BB_upper"], name="BB Upper",
+            line=dict(color="rgba(139,92,246,0.4)", width=1, dash="dot")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data["BB_lower"], name="BB Lower",
             line=dict(color="rgba(139,92,246,0.4)", width=1, dash="dot"),
-            fill="tonexty", fillcolor="rgba(139,92,246,0.05)"
-        ), row=1, col=1)
+            fill="tonexty", fillcolor="rgba(139,92,246,0.05)"), row=1, col=1)
     
-    # --- Row 2: RSI ---
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["RSI"], name="RSI",
-        line=dict(color="#8b5cf6", width=1.5)
-    ), row=2, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data["RSI"], name="RSI",
+        line=dict(color="#8b5cf6", width=1.5)), row=2, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="rgba(239,68,68,0.5)",
                   annotation_text="Overbought (70)", row=2, col=1)
     fig.add_hline(y=30, line_dash="dash", line_color="rgba(34,197,94,0.5)",
                   annotation_text="Oversold (30)", row=2, col=1)
     
-    # --- Row 3: MACD ---
     colors = ["#22c55e" if v >= 0 else "#ef4444" for v in data["MACD_hist"]]
-    fig.add_trace(go.Bar(
-        x=data.index, y=data["MACD_hist"], name="MACD Histogram",
-        marker_color=colors
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["MACD"], name="MACD",
-        line=dict(color="#60a5fa", width=1.2)
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=data.index, y=data["MACD_signal"], name="Signal",
-        line=dict(color="#f59e0b", width=1.2)
-    ), row=3, col=1)
+    fig.add_trace(go.Bar(x=data.index, y=data["MACD_hist"], name="MACD Histogram",
+        marker_color=colors), row=3, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data["MACD"], name="MACD",
+        line=dict(color="#60a5fa", width=1.2)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data["MACD_signal"], name="Signal",
+        line=dict(color="#f59e0b", width=1.2)), row=3, col=1)
     
-    # --- Row 4: Volume ---
-    vol_colors = ["#22c55e" if c >= o else "#ef4444" 
-                  for c, o in zip(data["Close"], data["Open"])]
-    fig.add_trace(go.Bar(
-        x=data.index, y=data["Volume"], name="Volume",
-        marker_color=vol_colors, opacity=0.7
-    ), row=4, col=1)
+    vol_colors = ["#22c55e" if c >= o else "#ef4444" for c, o in zip(data["Close"], data["Open"])]
+    fig.add_trace(go.Bar(x=data.index, y=data["Volume"], name="Volume",
+        marker_color=vol_colors, opacity=0.7), row=4, col=1)
     
-    # --- Layout ---
     fig.update_layout(
-        height=800,
-        template="plotly_dark",
-        paper_bgcolor="rgba(15,15,26,0.0)",
-        plot_bgcolor="rgba(20,20,40,0.5)",
+        height=800, template="plotly_dark",
+        paper_bgcolor="rgba(15,15,26,0.0)", plot_bgcolor="rgba(20,20,40,0.5)",
         font=dict(color="#c0c0ff"),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(0,0,0,0)"
-        ),
-        xaxis_rangeslider_visible=False,
-        margin=dict(t=60, b=30, l=60, r=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor="rgba(0,0,0,0)"),
+        xaxis_rangeslider_visible=False, margin=dict(t=60, b=30, l=60, r=30),
     )
-    
     fig.update_xaxes(gridcolor="rgba(100,100,255,0.1)")
     fig.update_yaxes(gridcolor="rgba(100,100,255,0.1)")
-    
     return fig
 
 
-def create_feature_importance_chart(importance: pd.Series) -> go.Figure:
-    """Create a horizontal bar chart of feature importance."""
+def create_feature_importance_chart(importance):
     fig = go.Figure()
-    
-    # Sort ascending for horizontal bar chart (top value at top)
     imp_sorted = importance.sort_values(ascending=True)
-    
-    colors = [f"rgba(99, 102, 241, {0.4 + 0.6 * (i/len(imp_sorted))})" 
-              for i in range(len(imp_sorted))]
-    
-    fig.add_trace(go.Bar(
-        x=imp_sorted.values,
-        y=imp_sorted.index,
-        orientation="h",
-        marker_color=colors,
-        text=[f"{v:.1%}" for v in imp_sorted.values],
-        textposition="auto",
+    colors = [f"rgba(99, 102, 241, {0.4 + 0.6 * (i/len(imp_sorted))})" for i in range(len(imp_sorted))]
+    fig.add_trace(go.Bar(x=imp_sorted.values, y=imp_sorted.index, orientation="h",
+        marker_color=colors, text=[f"{v:.1%}" for v in imp_sorted.values], textposition="auto"))
+    fig.update_layout(title="🧠 What the Model Cares About Most", template="plotly_dark",
+        paper_bgcolor="rgba(15,15,26,0.0)", plot_bgcolor="rgba(20,20,40,0.5)",
+        font=dict(color="#c0c0ff"), height=400, margin=dict(t=60, b=30, l=120, r=30),
+        xaxis_title="Importance Score")
+    return fig
+
+
+def create_backtest_chart(bt_result):
+    """Create backtest equity curve chart."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=bt_result["dates"], y=bt_result["strategy_returns"],
+        name="AI Strategy", line=dict(color="#8b5cf6", width=2.5),
+        fill="tozeroy", fillcolor="rgba(139,92,246,0.1)"
     ))
-    
+    fig.add_trace(go.Scatter(
+        x=bt_result["dates"], y=bt_result["buyhold_returns"],
+        name="Buy & Hold", line=dict(color="#f59e0b", width=2, dash="dash")
+    ))
+    fig.add_hline(y=1.0, line_dash="dot", line_color="rgba(255,255,255,0.3)",
+                  annotation_text="Break Even")
     fig.update_layout(
-        title="🧠 What the Model Cares About Most",
+        title="📉 Backtest: AI Strategy vs Buy & Hold",
         template="plotly_dark",
-        paper_bgcolor="rgba(15,15,26,0.0)",
-        plot_bgcolor="rgba(20,20,40,0.5)",
-        font=dict(color="#c0c0ff"),
-        height=400,
-        margin=dict(t=60, b=30, l=120, r=30),
-        xaxis_title="Importance Score",
+        paper_bgcolor="rgba(15,15,26,0.0)", plot_bgcolor="rgba(20,20,40,0.5)",
+        font=dict(color="#c0c0ff"), height=400,
+        margin=dict(t=60, b=30, l=60, r=30),
+        yaxis_title="Portfolio Value ($1 invested)",
+        xaxis_title="Date",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    
     return fig
 
 
@@ -372,7 +371,6 @@ def create_feature_importance_chart(importance: pd.Series) -> go.Figure:
 # MAIN ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Title
 st.markdown("""
 <div style="text-align: center; padding: 20px 0 30px 0;">
     <h1 style="color: #e0e0ff; font-size: 2.5rem; font-weight: 800; 
@@ -382,7 +380,7 @@ st.markdown("""
         🧠 AI Financial Decision Assistant
     </h1>
     <p style="color: #8080b0; font-size: 1.1rem;">
-        ML-Powered Stock Analysis with Explainable Predictions
+        ML-Powered Stock Analysis · Backtesting · News Sentiment · PDF Reports
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -399,7 +397,6 @@ if analyze:
         st.markdown(f'<div class="section-header">📋 {info["name"]} ({symbol})</div>', unsafe_allow_html=True)
         
         col1, col2, col3, col4, col5 = st.columns(5)
-        
         current_price = data["Close"].iloc[-1]
         prev_price = data["Close"].iloc[-2]
         price_change = ((current_price - prev_price) / prev_price) * 100
@@ -414,38 +411,18 @@ if analyze:
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        
         with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>Market Cap</h3>
-                <div class="value">{format_market_cap(info.get('market_cap', 0))}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
+            st.markdown(f"""<div class="metric-card"><h3>Market Cap</h3>
+                <div class="value">{format_market_cap(info.get('market_cap', 0))}</div></div>""", unsafe_allow_html=True)
         with col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>Sector</h3>
-                <div class="value" style="font-size: 1.2rem;">{info.get('sector', 'N/A')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
+            st.markdown(f"""<div class="metric-card"><h3>Sector</h3>
+                <div class="value" style="font-size: 1.2rem;">{info.get('sector', 'N/A')}</div></div>""", unsafe_allow_html=True)
         with col4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>52W High</h3>
-                <div class="value">${info.get('52w_high', 0):.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
+            st.markdown(f"""<div class="metric-card"><h3>52W High</h3>
+                <div class="value">${info.get('52w_high', 0):.2f}</div></div>""", unsafe_allow_html=True)
         with col5:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>52W Low</h3>
-                <div class="value">${info.get('52w_low', 0):.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"""<div class="metric-card"><h3>52W Low</h3>
+                <div class="value">${info.get('52w_low', 0):.2f}</div></div>""", unsafe_allow_html=True)
         
         # ─── STEP 3: Add Indicators ───
         with st.spinner("📊 Computing technical indicators..."):
@@ -458,38 +435,23 @@ if analyze:
         # ─── STEP 5: Generate Decision ───
         latest = data.iloc[-1]
         decision = make_decision(
-            prediction=result["prediction"],
-            confidence=result["confidence"],
-            rsi=latest.get("RSI", 50),
-            macd_hist=latest.get("MACD_hist", 0),
-            volatility=latest.get("Volatility", 0.02),
-            bb_position=latest.get("BB_position", 0.5)
+            prediction=result["prediction"], confidence=result["confidence"],
+            rsi=latest.get("RSI", 50), macd_hist=latest.get("MACD_hist", 0),
+            volatility=latest.get("Volatility", 0.02), bb_position=latest.get("BB_position", 0.5)
         )
-        
         risk = calculate_risk(data)
-        
         explanations = generate_explanation(
-            data=data,
-            prediction=result["prediction"],
-            confidence=result["confidence"],
-            feature_importance=result["feature_importance"],
-            decision=decision
+            data=data, prediction=result["prediction"], confidence=result["confidence"],
+            feature_importance=result["feature_importance"], decision=decision
         )
         
         # ─── STEP 6: Display Decision ───
         st.markdown('<div class="section-header">🎯 AI Decision</div>', unsafe_allow_html=True)
-        
         col_dec, col_risk = st.columns([2, 1])
         
         with col_dec:
             action = decision["action"]
-            if "BUY" in action:
-                css_class = "decision-buy"
-            elif "SELL" in action:
-                css_class = "decision-sell"
-            else:
-                css_class = "decision-hold"
-            
+            css_class = "decision-buy" if "BUY" in action else ("decision-sell" if "SELL" in action else "decision-hold")
             st.markdown(f"""
             <div class="{css_class}">
                 <p class="decision-text">{decision['emoji']} {action}</p>
@@ -514,50 +476,177 @@ if analyze:
                 </div>
                 <div style="margin-top: 12px;">
             """, unsafe_allow_html=True)
-            
             for factor_text, emoji, level in risk["factors"]:
                 color = {"safe": "#22c55e", "warning": "#f59e0b", "dangerous": "#ef4444"}.get(level, "#888")
-                st.markdown(f"""
-                <span style="color: {color}; font-size: 0.9rem;">
-                    {emoji} {factor_text}
-                </span><br>
-                """, unsafe_allow_html=True)
-            
+                st.markdown(f'<span style="color: {color}; font-size: 0.9rem;">{emoji} {factor_text}</span><br>', unsafe_allow_html=True)
             st.markdown("</div></div>", unsafe_allow_html=True)
         
         # ─── STEP 7: Explanation ───
         st.markdown('<div class="section-header">💡 Why This Decision? (Explainability)</div>', unsafe_allow_html=True)
-        
         for exp in explanations:
             st.markdown(f'<div class="explanation-card">{exp}</div>', unsafe_allow_html=True)
         
-        # ─── STEP 8: Charts ───
-        st.markdown('<div class="section-header">📈 Technical Analysis Chart</div>', unsafe_allow_html=True)
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW: SUPPORT & RESISTANCE + ADVANCED METRICS
+        # ═══════════════════════════════════════════════════════════════════
+        st.markdown('<div class="section-header">📏 Support & Resistance Levels</div>', unsafe_allow_html=True)
         
-        # Show last N days for cleaner chart
+        sr_levels = calculate_support_resistance(data)
+        advanced = calculate_advanced_metrics(data)
+        
+        col_sr, col_adv = st.columns([1, 1])
+        
+        with col_sr:
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3>Current Price: ${sr_levels['current_price']:.2f}</h3>
+                <div style="margin-top: 12px;">
+                    <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px;">🔴 Resistance (Ceiling)</div>
+            """, unsafe_allow_html=True)
+            for r in sr_levels.get("resistance", []):
+                st.markdown(f'<span class="sr-level" style="background: rgba(239,68,68,0.15); color: #fca5a5;">${r["price"]:.2f} ({r["strength"]} touches)</span>', unsafe_allow_html=True)
+            st.markdown(f"""
+                    <div style="color: #22c55e; font-weight: 600; margin: 12px 0 8px 0;">🟢 Support (Floor)</div>
+            """, unsafe_allow_html=True)
+            for s in sr_levels.get("support", []):
+                st.markdown(f'<span class="sr-level" style="background: rgba(34,197,94,0.15); color: #86efac;">${s["price"]:.2f} ({s["strength"]} touches)</span>', unsafe_allow_html=True)
+            st.markdown("</div></div>", unsafe_allow_html=True)
+        
+        with col_adv:
+            sharpe_color = "#22c55e" if advanced["sharpe_ratio"] > 1 else ("#f59e0b" if advanced["sharpe_ratio"] > 0 else "#ef4444")
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3>Advanced Metrics</h3>
+                <table style="width: 100%; color: #c0c0ff; font-size: 0.95rem;">
+                    <tr><td>📈 Annualized Return</td><td style="text-align:right; font-weight:600;">{advanced['annualized_return']:.2%}</td></tr>
+                    <tr><td>📊 Annualized Volatility</td><td style="text-align:right;">{advanced['annualized_volatility']:.2%}</td></tr>
+                    <tr><td>⭐ Sharpe Ratio</td><td style="text-align:right; font-weight:600; color:{sharpe_color};">{advanced['sharpe_ratio']:.2f}</td></tr>
+                    <tr><td>🎯 Sortino Ratio</td><td style="text-align:right;">{advanced['sortino_ratio']:.2f}</td></tr>
+                    <tr><td>📉 Max Drawdown</td><td style="text-align:right; color:#ef4444;">{advanced['max_drawdown']:.2%}</td></tr>
+                    <tr><td>⚖️ Profit Factor</td><td style="text-align:right;">{advanced['profit_factor']:.2f}</td></tr>
+                    <tr><td>🟢 Best Day</td><td style="text-align:right; color:#22c55e;">{advanced['best_day']:.2%}</td></tr>
+                    <tr><td>🔴 Worst Day</td><td style="text-align:right; color:#ef4444;">{advanced['worst_day']:.2%}</td></tr>
+                    <tr><td>📊 VaR (95%)</td><td style="text-align:right;">{advanced['var_95']:.2%}</td></tr>
+                </table>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW: NEWS SENTIMENT
+        # ═══════════════════════════════════════════════════════════════════
+        sentiment_data = None
+        if run_sentiment_opt:
+            st.markdown('<div class="section-header">📰 News Sentiment Analysis</div>', unsafe_allow_html=True)
+            
+            with st.spinner("📰 Analyzing news sentiment..."):
+                sentiment_data = get_sentiment_analysis(symbol, info.get("name", ""))
+            
+            # Sentiment overview
+            col_sent_score, col_sent_detail = st.columns([1, 2])
+            
+            with col_sent_score:
+                score_emoji = "🟢" if sentiment_data["overall_label"] == "Positive" else ("🔴" if sentiment_data["overall_label"] == "Negative" else "🟡")
+                st.markdown(f"""
+                <div class="metric-card" style="text-align: center;">
+                    <h3>Overall Sentiment</h3>
+                    <div style="font-size: 3rem;">{score_emoji}</div>
+                    <div class="value" style="color: {sentiment_data['overall_color']};">
+                        {sentiment_data['overall_label']}
+                    </div>
+                    <div style="color: #8080b0; margin-top: 8px;">
+                        Score: {sentiment_data['overall_score']:+.2f} | 
+                        {sentiment_data['positive_count']}🟢 {sentiment_data['negative_count']}🔴 {sentiment_data['neutral_count']}🟡
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_sent_detail:
+                st.markdown(f'<div class="explanation-card">{sentiment_data["summary"]}</div>', unsafe_allow_html=True)
+                
+                for article in sentiment_data.get("articles", [])[:6]:
+                    css = f"news-{article['label'].lower()}"
+                    keywords_str = " ".join(article.get("keywords", []))
+                    st.markdown(f"""
+                    <div class="news-card {css}">
+                        {article['emoji']} <strong>{article['headline'][:100]}{'...' if len(article['headline']) > 100 else ''}</strong>
+                        <span style="float:right; color: {article['color']}; font-weight: 600;">{article['score']:+.2f}</span>
+                        <br><span style="font-size: 0.8rem; color: #8080a0;">{article.get('source', '')} {keywords_str}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # ─── Technical Analysis Chart ───
+        st.markdown('<div class="section-header">📈 Technical Analysis Chart</div>', unsafe_allow_html=True)
         chart_days = st.slider("Chart range (trading days)", 30, len(data), min(120, len(data)))
         chart_data = data.tail(chart_days)
+        st.plotly_chart(create_price_chart(chart_data, symbol), use_container_width=True)
         
-        fig = create_price_chart(chart_data, symbol)
-        st.plotly_chart(fig, use_container_width=True)
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW: BACKTESTING
+        # ═══════════════════════════════════════════════════════════════════
+        bt_result = None
+        if run_backtest_opt:
+            st.markdown('<div class="section-header">📉 Backtesting — Historical Performance</div>', unsafe_allow_html=True)
+            
+            with st.spinner("⏳ Running walk-forward backtest (this may take a moment)..."):
+                try:
+                    bt_result = run_backtest(data, lookback=200, step=3)
+                    
+                    # Equity curve chart
+                    st.plotly_chart(create_backtest_chart(bt_result), use_container_width=True)
+                    
+                    # Metrics
+                    bt_cols = st.columns(6)
+                    strategy_color = "#22c55e" if bt_result["total_return_strategy"] > 0 else "#ef4444"
+                    buyhold_color = "#22c55e" if bt_result["total_return_buyhold"] > 0 else "#ef4444"
+                    
+                    metrics = [
+                        ("AI Strategy Return", f"{bt_result['total_return_strategy']:+.1f}%", strategy_color),
+                        ("Buy & Hold Return", f"{bt_result['total_return_buyhold']:+.1f}%", buyhold_color),
+                        ("Backtest Accuracy", f"{bt_result['accuracy']:.0%}", "#c0c0ff"),
+                        ("Sharpe Ratio", f"{bt_result['sharpe_ratio']:.2f}", "#c0c0ff"),
+                        ("Win Rate", f"{bt_result['win_rate']:.0%}", "#c0c0ff"),
+                        ("Max Drawdown", f"{bt_result['max_drawdown']:.1f}%", "#ef4444"),
+                    ]
+                    
+                    for i, (name, value, color) in enumerate(metrics):
+                        with bt_cols[i]:
+                            st.markdown(f"""
+                            <div class="metric-card" style="text-align: center;">
+                                <h3>{name}</h3>
+                                <div class="value" style="font-size: 1.4rem; color: {color};">{value}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                    # Interpretation
+                    if bt_result["total_return_strategy"] > bt_result["total_return_buyhold"]:
+                        st.markdown("""
+                        <div class="explanation-card" style="border-left-color: #22c55e;">
+                            ✅ <strong>The AI strategy outperformed buy-and-hold</strong> on historical data. 
+                            The model successfully avoided some downturns by going to cash during predicted down days.
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div class="explanation-card" style="border-left-color: #f59e0b;">
+                            ⚠️ <strong>Buy-and-hold outperformed the AI strategy</strong> on historical data. 
+                            This can happen in strong bull markets where staying invested beats any switching strategy.
+                            The AI may still add value through risk reduction (lower drawdowns).
+                        </div>
+                        """, unsafe_allow_html=True)
+                except ValueError as e:
+                    st.warning(f"⚠️ Backtest skipped: {e}")
         
-        # ─── STEP 9: Feature Importance ───
+        # ─── Feature Importance ───
         st.markdown('<div class="section-header">🧠 Model Insights</div>', unsafe_allow_html=True)
-        
         col_fi, col_stats = st.columns([2, 1])
         
         with col_fi:
-            fig_fi = create_feature_importance_chart(result["feature_importance"])
-            st.plotly_chart(fig_fi, use_container_width=True)
+            st.plotly_chart(create_feature_importance_chart(result["feature_importance"]), use_container_width=True)
         
         with col_stats:
-            st.markdown("""
-            <div class="metric-card">
-                <h3>Model Statistics</h3>
-            </div>
-            """, unsafe_allow_html=True)
-            
             st.markdown(f"""
+            <div class="metric-card"><h3>Model Statistics</h3></div>
+            
             | Metric | Value |
             |--------|-------|
             | **Algorithm** | Random Forest |
@@ -569,9 +658,8 @@ if analyze:
             | **Features Used** | {len(result['feature_names'])} |
             """)
         
-        # ─── STEP 10: Key Indicator Values ───
+        # ─── Key Indicator Values ───
         st.markdown('<div class="section-header">📊 Current Indicator Values</div>', unsafe_allow_html=True)
-        
         ind_cols = st.columns(6)
         indicators_display = [
             ("RSI", f"{latest.get('RSI', 0):.1f}", "0-100"),
@@ -581,7 +669,6 @@ if analyze:
             ("5D Return", f"{latest.get('Return_5d', 0):.2%}", "Weekly"),
             ("Vol Ratio", f"{latest.get('Volume_ratio', 0):.2f}", "vs 20d avg"),
         ]
-        
         for i, (name, value, subtitle) in enumerate(indicators_display):
             with ind_cols[i]:
                 st.markdown(f"""
@@ -592,13 +679,11 @@ if analyze:
                 </div>
                 """, unsafe_allow_html=True)
         
-        # ─── STEP 11: Multi-Stock Comparison (if requested) ───
+        # ─── Multi-Stock Comparison ───
         if compare_symbols.strip():
             st.markdown('<div class="section-header">📊 Multi-Stock Comparison</div>', unsafe_allow_html=True)
-            
             compare_list = [s.strip().upper() for s in compare_symbols.split(",") if s.strip()]
             all_symbols = [symbol] + compare_list
-            
             analyses = {}
             
             for sym in all_symbols:
@@ -609,47 +694,33 @@ if analyze:
                             sym_data = add_all_indicators(sym_data)
                         sym_result = train_model(sym_data) if sym != symbol else result
                         sym_latest = sym_data.iloc[-1]
-                        
                         sym_decision = make_decision(
-                            prediction=sym_result["prediction"],
-                            confidence=sym_result["confidence"],
-                            rsi=sym_latest.get("RSI", 50),
-                            macd_hist=sym_latest.get("MACD_hist", 0),
-                            volatility=sym_latest.get("Volatility", 0.02),
-                            bb_position=sym_latest.get("BB_position", 0.5)
+                            prediction=sym_result["prediction"], confidence=sym_result["confidence"],
+                            rsi=sym_latest.get("RSI", 50), macd_hist=sym_latest.get("MACD_hist", 0),
+                            volatility=sym_latest.get("Volatility", 0.02), bb_position=sym_latest.get("BB_position", 0.5)
                         )
                         sym_risk = calculate_risk(sym_data)
-                        
                         analyses[sym] = {
-                            "decision": sym_decision,
-                            "risk": sym_risk,
-                            "confidence": sym_result["confidence"],
-                            "accuracy": sym_result["accuracy"],
-                            "price": sym_data["Close"].iloc[-1],
-                            "rsi": sym_latest.get("RSI", 50),
+                            "decision": sym_decision, "risk": sym_risk,
+                            "confidence": sym_result["confidence"], "accuracy": sym_result["accuracy"],
+                            "price": sym_data["Close"].iloc[-1], "rsi": sym_latest.get("RSI", 50),
                         }
                 except Exception as e:
                     st.warning(f"Could not analyze {sym}: {e}")
             
             if analyses:
-                # Comparison table
                 comp_data = []
                 for sym, a in analyses.items():
                     comp_data.append({
-                        "Symbol": sym,
-                        "Price": f"${a['price']:.2f}",
+                        "Symbol": sym, "Price": f"${a['price']:.2f}",
                         "Decision": f"{a['decision']['emoji']} {a['decision']['action']}",
-                        "Confidence": f"{a['confidence']:.0%}",
-                        "RSI": f"{a['rsi']:.1f}",
+                        "Confidence": f"{a['confidence']:.0%}", "RSI": f"{a['rsi']:.1f}",
                         "Risk": f"{a['risk']['level']} ({a['risk']['score']:.0f})",
                         "Accuracy": f"{a['accuracy']:.0%}",
                     })
-                
                 st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
                 
-                # Portfolio suggestion
                 st.markdown('<div class="section-header">💼 Portfolio Allocation Suggestion</div>', unsafe_allow_html=True)
-                
                 portfolio = simple_portfolio_suggestion(analyses)
                 for item in portfolio:
                     alloc_pct = item["allocation"] * 100
@@ -659,6 +730,29 @@ if analyze:
                     </div>
                     """, unsafe_allow_html=True)
         
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW: PDF DOWNLOAD
+        # ═══════════════════════════════════════════════════════════════════
+        st.markdown('<div class="section-header">📄 Download Report</div>', unsafe_allow_html=True)
+        
+        try:
+            pdf_bytes = generate_report(
+                symbol=symbol, stock_info=info, decision=decision, risk=risk,
+                model_result=result, explanations=explanations,
+                sentiment=sentiment_data, backtest=bt_result,
+                advanced_metrics=advanced, support_resistance=sr_levels,
+            )
+            
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=pdf_bytes,
+                file_name=f"{symbol}_analysis_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.warning(f"PDF generation failed: {e}")
+        
         # ─── Disclaimer ───
         st.markdown("""
         <div class="disclaimer">
@@ -666,8 +760,7 @@ if analyze:
             for educational and informational purposes only. Past performance does not guarantee future results. 
             Stock markets are inherently unpredictable. The predictions and suggestions provided should NOT be 
             treated as financial advice. Always do your own research and consult with a qualified financial 
-            advisor before making any investment decisions. The creators of this tool assume no liability 
-            for any financial losses.
+            advisor before making any investment decisions.
         </div>
         """, unsafe_allow_html=True)
         
@@ -678,7 +771,7 @@ if analyze:
         st.exception(e)
 
 else:
-    # Landing state — show instructions
+    # Landing state
     st.markdown("""
     <div style="text-align: center; padding: 60px 20px; color: #8080b0;">
         <div style="font-size: 4rem; margin-bottom: 20px;">📊</div>
@@ -688,26 +781,31 @@ else:
             <strong style="color:#c0c0ff;">GOOGL</strong>, <strong style="color:#c0c0ff;">TSLA</strong>) 
             and click <strong style="color:#6366f1;">Analyze Stock</strong>.
         </p>
-        <div style="margin-top: 40px; display: flex; justify-content: center; gap: 40px; flex-wrap: wrap;">
-            <div style="text-align: center;">
+        <div style="margin-top: 40px; display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
+            <div style="text-align: center; min-width: 100px;">
                 <div style="font-size: 2rem;">🤖</div>
                 <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">ML Predictions</div>
-                <div style="font-size: 0.9rem;">Random Forest analysis</div>
+                <div style="font-size: 0.85rem;">Random Forest</div>
             </div>
-            <div style="text-align: center;">
+            <div style="text-align: center; min-width: 100px;">
                 <div style="font-size: 2rem;">💡</div>
                 <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">Explainable AI</div>
-                <div style="font-size: 0.9rem;">Know WHY, not just WHAT</div>
+                <div style="font-size: 0.85rem;">Know WHY</div>
             </div>
-            <div style="text-align: center;">
+            <div style="text-align: center; min-width: 100px;">
                 <div style="font-size: 2rem;">📉</div>
-                <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">Risk Scoring</div>
-                <div style="font-size: 0.9rem;">Multi-factor assessment</div>
+                <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">Backtesting</div>
+                <div style="font-size: 0.85rem;">Historical proof</div>
             </div>
-            <div style="text-align: center;">
-                <div style="font-size: 2rem;">📊</div>
-                <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">Portfolio</div>
-                <div style="font-size: 0.9rem;">Allocation suggestions</div>
+            <div style="text-align: center; min-width: 100px;">
+                <div style="font-size: 2rem;">📰</div>
+                <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">Sentiment</div>
+                <div style="font-size: 0.85rem;">News analysis</div>
+            </div>
+            <div style="text-align: center; min-width: 100px;">
+                <div style="font-size: 2rem;">📄</div>
+                <div style="color: #a0a0ff; font-weight: 600; margin-top: 8px;">PDF Reports</div>
+                <div style="font-size: 0.85rem;">Download & share</div>
             </div>
         </div>
     </div>
