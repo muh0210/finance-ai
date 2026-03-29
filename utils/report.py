@@ -19,6 +19,29 @@ WHAT'S IN THE REPORT:
 from fpdf import FPDF
 from datetime import datetime
 import io
+import re
+
+
+def sanitize(text: str) -> str:
+    """Replace Unicode characters that Helvetica can't render with ASCII equivalents."""
+    replacements = {
+        "\u2014": "-",   # em dash
+        "\u2013": "-",   # en dash
+        "\u2018": "'",   # left single quote
+        "\u2019": "'",   # right single quote
+        "\u201c": '"',   # left double quote
+        "\u201d": '"',   # right double quote
+        "\u2026": "...", # ellipsis
+        "\u2022": "*",   # bullet
+        "\u00b7": "*",   # middle dot
+        "\u2265": ">=",  # greater than or equal
+        "\u2264": "<=",  # less than or equal
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    # Remove any remaining emoji/non-latin1 characters
+    text = text.encode("latin-1", errors="replace").decode("latin-1")
+    return text
 
 
 class FinancialReport(FPDF):
@@ -27,7 +50,7 @@ class FinancialReport(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 8, "AI Financial Decision Assistant — Confidential Report", align="R")
+        self.cell(0, 8, sanitize("AI Financial Decision Assistant - Confidential Report"), align="R")
         self.ln(10)
     
     def footer(self):
@@ -39,7 +62,7 @@ class FinancialReport(FPDF):
     def section_title(self, title):
         self.set_font("Helvetica", "B", 14)
         self.set_text_color(30, 30, 80)
-        self.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 10, sanitize(title), new_x="LMARGIN", new_y="NEXT")
         self.set_draw_color(80, 80, 200)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(4)
@@ -47,10 +70,10 @@ class FinancialReport(FPDF):
     def key_value(self, key, value, bold_value=False):
         self.set_font("Helvetica", "", 10)
         self.set_text_color(80, 80, 80)
-        self.cell(60, 7, f"{key}:")
+        self.cell(60, 7, sanitize(f"{key}:"))
         self.set_font("Helvetica", "B" if bold_value else "", 10)
         self.set_text_color(30, 30, 30)
-        self.cell(0, 7, str(value), new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 7, sanitize(str(value)), new_x="LMARGIN", new_y="NEXT")
 
 
 def generate_report(
@@ -114,7 +137,7 @@ def generate_report(
         pdf.set_text_color(200, 0, 0)
     else:
         pdf.set_text_color(200, 150, 0)
-    pdf.cell(0, 12, f"{decision.get('emoji', '')} {action}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 12, sanitize(f"{decision.get('emoji', '')} {action}"), new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_text_color(30, 30, 30)
     pdf.key_value("Model Confidence", f"{model_result.get('confidence', 0):.0%}", bold_value=True)
@@ -139,7 +162,7 @@ def generate_report(
     pdf.set_text_color(30, 30, 30)
     for factor_text, emoji, level in risk.get("factors", []):
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 7, f"  {emoji} {factor_text}", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 7, sanitize(f"  {emoji} {factor_text}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
     
     # ─── EXPLANATION ───
@@ -150,7 +173,7 @@ def generate_report(
     for exp in explanations:
         # Strip markdown bold markers for PDF
         clean = exp.replace("**", "").replace("*", "")
-        pdf.multi_cell(0, 6, clean)
+        pdf.multi_cell(0, 6, sanitize(clean))
         pdf.ln(3)
     
     # ─── ADVANCED METRICS ───
@@ -217,7 +240,7 @@ def generate_report(
         for article in sentiment['articles'][:5]:  # Top 5
             pdf.set_text_color(50, 50, 50)
             headline = article['headline'][:80] + ("..." if len(article['headline']) > 80 else "")
-            pdf.cell(0, 6, f"  {article['emoji']} {headline}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 6, sanitize(f"  {article['emoji']} {headline}"), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(5)
     
     # ─── DISCLAIMER ───
