@@ -261,4 +261,4 @@ def generate_report(
     pdf.multi_cell(0, 5, disclaimer)
     
     # Return as bytes
-    return pdf.output()
+    return bytes(pdf.output())
