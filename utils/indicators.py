@@ -162,7 +162,12 @@ def add_bollinger_bands(data: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     data["BB_middle"] = sma
     
     # How close is the price to the upper/lower band? (0 = lower, 1 = upper)
-    data["BB_position"] = (data["Close"] - data["BB_lower"]) / (data["BB_upper"] - data["BB_lower"])
+    bb_range = data["BB_upper"] - data["BB_lower"]
+    data["BB_position"] = np.where(
+        bb_range > 0,
+        (data["Close"] - data["BB_lower"]) / bb_range,
+        0.5  # Default to midpoint when bands are flat
+    )
     
     return data
 
@@ -222,15 +227,19 @@ def add_price_features(data: pd.DataFrame) -> pd.DataFrame:
     Helps the model understand if we're at a local high or low.
     """
     # Price position within the last 20 days (0 = lowest, 1 = highest)
-    data["Price_position_20"] = (
-        (data["Close"] - data["Low"].rolling(20).min()) /
-        (data["High"].rolling(20).max() - data["Low"].rolling(20).min())
+    range_20 = data["High"].rolling(20).max() - data["Low"].rolling(20).min()
+    data["Price_position_20"] = np.where(
+        range_20 > 0,
+        (data["Close"] - data["Low"].rolling(20).min()) / range_20,
+        0.5  # Default to midpoint when range is zero
     )
     
     # Price position within the last 50 days
-    data["Price_position_50"] = (
-        (data["Close"] - data["Low"].rolling(50).min()) /
-        (data["High"].rolling(50).max() - data["Low"].rolling(50).min())
+    range_50 = data["High"].rolling(50).max() - data["Low"].rolling(50).min()
+    data["Price_position_50"] = np.where(
+        range_50 > 0,
+        (data["Close"] - data["Low"].rolling(50).min()) / range_50,
+        0.5  # Default to midpoint when range is zero
     )
     
     return data

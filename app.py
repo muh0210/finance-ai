@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import re
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -237,6 +238,11 @@ with st.sidebar:
     # Analyze button
     analyze = st.button("🚀 Analyze Stock", use_container_width=True, type="primary")
     
+    # Validate symbol format
+    _valid_symbol = bool(re.match(r"^[A-Za-z0-9\.\-]{1,10}$", symbol))
+    if not _valid_symbol and symbol:
+        st.warning("⚠️ Invalid symbol format. Use 1-10 alphanumeric characters (e.g., AAPL, BRK.B).")
+    
     st.markdown("---")
     st.markdown("""
     <div class="disclaimer">
@@ -386,7 +392,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-if analyze:
+if analyze and _valid_symbol:
     try:
         # ─── STEP 1: Fetch Data ───
         with st.spinner(f"📡 Fetching {symbol} data from Yahoo Finance..."):
@@ -539,40 +545,47 @@ if analyze:
             st.markdown('<div class="section-header">📰 News Sentiment Analysis</div>', unsafe_allow_html=True)
             
             with st.spinner("📰 Analyzing news sentiment..."):
-                sentiment_data = get_sentiment_analysis(symbol, info.get("name", ""))
+                try:
+                    sentiment_data = get_sentiment_analysis(symbol, info.get("name", ""))
+                except Exception as e:
+                    sentiment_data = None
+                    st.warning(f"⚠️ Sentiment analysis failed: {e}")
             
-            # Sentiment overview
-            col_sent_score, col_sent_detail = st.columns([1, 2])
             
-            with col_sent_score:
-                score_emoji = "🟢" if sentiment_data["overall_label"] == "Positive" else ("🔴" if sentiment_data["overall_label"] == "Negative" else "🟡")
-                st.markdown(f"""
-                <div class="metric-card" style="text-align: center;">
-                    <h3>Overall Sentiment</h3>
-                    <div style="font-size: 3rem;">{score_emoji}</div>
-                    <div class="value" style="color: {sentiment_data['overall_color']};">
-                        {sentiment_data['overall_label']}
-                    </div>
-                    <div style="color: #8080b0; margin-top: 8px;">
-                        Score: {sentiment_data['overall_score']:+.2f} | 
-                        {sentiment_data['positive_count']}🟢 {sentiment_data['negative_count']}🔴 {sentiment_data['neutral_count']}🟡
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col_sent_detail:
-                st.markdown(f'<div class="explanation-card">{sentiment_data["summary"]}</div>', unsafe_allow_html=True)
+            # Sentiment overview — only display if we got data
+            if sentiment_data and sentiment_data.get("articles") is not None:
+                col_sent_score, col_sent_detail = st.columns([1, 2])
                 
-                for article in sentiment_data.get("articles", [])[:6]:
-                    css = f"news-{article['label'].lower()}"
-                    keywords_str = " ".join(article.get("keywords", []))
+                with col_sent_score:
+                    overall_label = sentiment_data.get("overall_label", "Neutral")
+                    score_emoji = "🟢" if overall_label == "Positive" else ("🔴" if overall_label == "Negative" else "🟡")
                     st.markdown(f"""
-                    <div class="news-card {css}">
-                        {article['emoji']} <strong>{article['headline'][:100]}{'...' if len(article['headline']) > 100 else ''}</strong>
-                        <span style="float:right; color: {article['color']}; font-weight: 600;">{article['score']:+.2f}</span>
-                        <br><span style="font-size: 0.8rem; color: #8080a0;">{article.get('source', '')} {keywords_str}</span>
+                    <div class="metric-card" style="text-align: center;">
+                        <h3>Overall Sentiment</h3>
+                        <div style="font-size: 3rem;">{score_emoji}</div>
+                        <div class="value" style="color: {sentiment_data.get('overall_color', '#f59e0b')};">
+                            {overall_label}
+                        </div>
+                        <div style="color: #8080b0; margin-top: 8px;">
+                            Score: {sentiment_data.get('overall_score', 0):+.2f} | 
+                            {sentiment_data.get('positive_count', 0)}🟢 {sentiment_data.get('negative_count', 0)}🔴 {sentiment_data.get('neutral_count', 0)}🟡
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                with col_sent_detail:
+                    st.markdown(f'<div class="explanation-card">{sentiment_data.get("summary", "No summary available.")}</div>', unsafe_allow_html=True)
+                    
+                    for article in sentiment_data.get("articles", [])[:6]:
+                        css = f"news-{article.get('label', 'neutral').lower()}"
+                        keywords_str = " ".join(article.get("keywords", []))
+                        st.markdown(f"""
+                        <div class="news-card {css}">
+                            {article.get('emoji', '')} <strong>{article.get('headline', '')[:100]}{'...' if len(article.get('headline', '')) > 100 else ''}</strong>
+                            <span style="float:right; color: {article.get('color', '#888')}; font-weight: 600;">{article.get('score', 0):+.2f}</span>
+                            <br><span style="font-size: 0.8rem; color: #8080a0;">{article.get('source', '')} {keywords_str}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
         
         # ─── Technical Analysis Chart ───
         st.markdown('<div class="section-header">📈 Technical Analysis Chart</div>', unsafe_allow_html=True)
@@ -751,7 +764,9 @@ if analyze:
                 use_container_width=True,
             )
         except Exception as e:
-            st.warning(f"PDF generation failed: {e}")
+            st.error(f"❌ PDF generation failed: {e}")
+            import traceback
+            st.expander("Show details").code(traceback.format_exc())
         
         # ─── Disclaimer ───
         st.markdown("""

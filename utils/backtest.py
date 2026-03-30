@@ -69,6 +69,9 @@ def run_backtest(data: pd.DataFrame, lookback: int = 200, step: int = 1) -> dict
     """
     available_features = [f for f in FEATURE_COLUMNS if f in data.columns]
     
+    if not available_features:
+        raise ValueError("No feature columns found in data. Run add_all_indicators() first.")
+    
     # Create target
     data = data.copy()
     data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
@@ -135,12 +138,19 @@ def run_backtest(data: pd.DataFrame, lookback: int = 200, step: int = 1) -> dict
     
     # Max Drawdown
     cummax = strategy_cumulative.cummax()
-    drawdown = (strategy_cumulative - cummax) / cummax
-    max_drawdown = abs(drawdown.min())
+    drawdown = np.where(
+        cummax > 0,
+        (strategy_cumulative - cummax) / cummax,
+        0
+    )
+    max_drawdown = abs(min(drawdown)) if len(drawdown) > 0 else 0
     
     # Win Rate (of days we were in the market)
     in_market_returns = [r for r, p in zip(strategy_daily_returns, predictions) if p == 1]
-    win_rate = sum(1 for r in in_market_returns if r > 0) / max(len(in_market_returns), 1)
+    if len(in_market_returns) > 0:
+        win_rate = sum(1 for r in in_market_returns if r > 0) / len(in_market_returns)
+    else:
+        win_rate = 0.0
     
     # Trade count (position changes)
     trades = sum(1 for i in range(1, len(predictions)) if predictions[i] != predictions[i-1])

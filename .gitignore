@@ -9,6 +9,7 @@ build/
 
 # Virtual environment
 venv/
+.venv/
 env/
 .env
 
@@ -27,3 +28,9 @@ models/*.pkl
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+test_report.pdf
+
+# Local agent workflows
+.agent/

@@ -78,7 +78,18 @@ def analyze_headline(headline: str) -> dict:
         dict with 'score' (-1.0 to +1.0), 'label' (Positive/Negative/Neutral),
         'color', and matched 'keywords'
     """
-    text = headline.lower()
+    # Guard against None/empty headlines
+    if not headline or not isinstance(headline, str) or not headline.strip():
+        return {
+            "headline": headline or "",
+            "score": 0,
+            "label": "Neutral",
+            "color": "#f59e0b",
+            "emoji": "?",
+            "keywords": [],
+        }
+    
+    text = headline.lower().strip()
     score = 0
     matched_keywords = []
     intensity = 1.0
@@ -152,15 +163,22 @@ def fetch_news(symbol: str, company_name: str = "", max_articles: int = 10) -> l
     try:
         feed = feedparser.parse(url)
         
+        if not feed or not hasattr(feed, 'entries') or not feed.entries:
+            return []
+        
         articles = []
         for entry in feed.entries[:max_articles]:
             # Extract source from title (Google News format: "Title - Source")
-            title = entry.get("title", "")
+            title = entry.get("title", "") or ""
             source = ""
             if " - " in title:
                 parts = title.rsplit(" - ", 1)
                 title = parts[0]
                 source = parts[1] if len(parts) > 1 else ""
+            
+            # Skip entries with empty titles
+            if not title.strip():
+                continue
             
             # Parse published date
             published = entry.get("published", "")
